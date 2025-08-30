@@ -1,95 +1,95 @@
 import os
+import asyncio
+import logging
 from pyrogram import Client, filters
-from pyrogram.types import Message
-from PyPDF2 import PdfReader
-from ebooklib import epub
-import pytesseract
 from pdf2image import convert_from_path
-from PIL import Image
+import pytesseract
+from ebooklib import epub
+from aiohttp import web
 
-# Load from environment
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# ---------------- Logging ----------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ---------------- Bot Credentials ----------------
+API_ID = int(os.getenv("API_ID", "123456"))        # replace with your API_ID or env var
+API_HASH = os.getenv("API_HASH", "your_api_hash")  # replace with your API_HASH or env var
+BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
 
 bot = Client("pdf2epub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-
-def pdf_to_epub(pdf_path, epub_path):
-    reader = PdfReader(pdf_path)
+# ---------------- Helpers ----------------
+async def pdf_to_epub(pdf_path, output_path, use_ocr=False):
     book = epub.EpubBook()
     book.set_identifier("pdf2epub")
-    book.set_title("Converted PDF")
+    book.set_title("Converted Book")
     book.set_language("en")
 
-    has_text = False
+    if use_ocr:
+        logger.info("Running OCR on PDF...")
+        pages = convert_from_path(pdf_path)
+        text_content = ""
+        for page in pages:
+            text_content += pytesseract.image_to_string(page, lang="eng") + "\n"
+    else:
+        # Fallback: extract text with PyPDF2
+        import PyPDF2
+        reader = PyPDF2.PdfReader(open(pdf_path, "rb"))
+        text_content = "\n".join([p.extract_text() or "" for p in reader.pages])
 
-    for i, page in enumerate(reader.pages, start=1):
-        text = page.extract_text() or ""
-        if text.strip():
-            has_text = True
-        chapter = epub.EpubHtml(
-            title=f"Page {i}",
-            file_name=f"page_{i}.xhtml",
-            lang="en"
-        )
-        chapter.content = f"<html><body><pre>{text}</pre></body></html>"
-        book.add_item(chapter)
-        book.spine.append(chapter)
+    # Add text to EPUB
+    chapter = epub.EpubHtml(title="Content", file_name="content.xhtml", lang="en")
+    chapter.content = f"<h1>Converted PDF</h1><p>{text_content}</p>"
+    book.add_item(chapter)
 
-    # OCR fallback
-    if not has_text:
-        images = convert_from_path(pdf_path, dpi=200)
-        book = epub.EpubBook()
-        book.set_identifier("pdf2epub")
-        book.set_title("Converted PDF (OCR)")
-        book.set_language("en")
-
-        for i, img in enumerate(images, start=1):
-            text = pytesseract.image_to_string(img, lang="eng+mal")  # OCR English + Malayalam
-            chapter = epub.EpubHtml(
-                title=f"Page {i}",
-                file_name=f"page_{i}.xhtml",
-                lang="en"
-            )
-            chapter.content = f"<html><body><pre>{text}</pre></body></html>"
-            book.add_item(chapter)
-            book.spine.append(chapter)
-
-        book.add_item(epub.EpubNcx())
-        book.add_item(epub.EpubNav())
-        epub.write_epub(epub_path, book, {})
-        return
-
-    # Normal text PDF
+    # TOC & navigation
+    book.toc = (epub.Link("content.xhtml", "Content", "content"),)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
-    epub.write_epub(epub_path, book, {})
 
+    epub.write_epub(output_path, book)
+    return output_path
 
+# ---------------- Bot Handlers ----------------
 @bot.on_message(filters.command("start"))
-async def start(client, message: Message):
-    await message.reply_text("👋 Hello! Send me a PDF (or forward one) and I will convert it to EPUB (supports OCR).")
+async def start(client, message):
+    await message.reply_text("👋 Send me a PDF and I will convert it to EPUB (with OCR support).")
 
-
-@bot.on_message(filters.document.mime_type("application/pdf"))
-async def handle_pdf(client, message: Message):
-    file = await message.download()
-    epub_file = file.replace(".pdf", ".epub")
-
-    await message.reply_text("📄 Received PDF! Converting...")
-
+@bot.on_message(filters.document & filters.file_mime_type("application/pdf"))
+async def handle_pdf(client, message):
     try:
-        pdf_to_epub(file, epub_file)
-        await message.reply_document(epub_file, caption="✅ Here is your EPUB file")
+        pdf_file = await message.download()
+        epub_file = pdf_file.replace(".pdf", ".epub")
+
+        # Run OCR only if user says "ocr"
+        use_ocr = "ocr" in (message.caption or "").lower()
+
+        await message.reply_text("📚 Converting your PDF... Please wait ⏳")
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, pdf_to_epub, pdf_file, epub_file, use_ocr)
+
+        await message.reply_document(epub_file, caption="✅ Here is your EPUB!")
+
+        os.remove(pdf_file)
+        os.remove(epub_file)
+
     except Exception as e:
-        await message.reply_text(f"❌ Error: {e}")
-    finally:
-        if os.path.exists(file):
-            os.remove(file)
-        if os.path.exists(epub_file):
-            os.remove(epub_file)
+        logger.error(f"Conversion failed: {e}")
+        await message.reply_text(f"❌ Failed to convert: {e}")
 
+# ---------------- Dummy Web Server ----------------
+async def healthcheck(request):
+    return web.Response(text="Bot is alive!")
 
+def run_web():
+    app = web.Application()
+    app.router.add_get("/", healthcheck)
+    web.run_app(app, port=int(os.getenv("PORT", 8080)))
+
+# ---------------- Run Both ----------------
 if __name__ == "__main__":
+    import threading
+    t = threading.Thread(target=run_web, daemon=True)
+    t.start()
     bot.run()
