@@ -54,30 +54,20 @@ def clean_ocr_text(raw_text: str):
     return headlines, content_blocks
 
 
-def pdf_to_epub(pdf_path, output_path, use_ocr=False):
+def pdf_to_epub(pdf_path, output_path):
     book = epub.EpubBook()
     book.set_identifier("pdf2epub")
     book.set_title("Converted Book")
     book.set_language("en")
 
-    # Extract text
-    if use_ocr:
-        logger.info("Running OCR on PDF...")
-        pages = convert_from_path(pdf_path, dpi=300)
-        raw_text = ""
-        for page in pages:
-            raw_text += pytesseract.image_to_string(page, lang="eng") + "\n"
-        headlines, contents = clean_ocr_text(raw_text)
-    else:
-        import PyPDF2
-        try:
-            reader = PyPDF2.PdfReader(open(pdf_path, "rb"))
-            text_content = "\n".join([p.extract_text() or "" for p in reader.pages])
-        except Exception as e:
-            logger.warning(f"PyPDF2 failed, fallback to OCR: {e}")
-            return pdf_to_epub(pdf_path, output_path, use_ocr=True)
+    # Always OCR PDF
+    logger.info("Running OCR on PDF...")
+    pages = convert_from_path(pdf_path, dpi=300)
+    raw_text = ""
+    for page in pages:
+        raw_text += pytesseract.image_to_string(page, lang="eng") + "\n"
 
-        headlines, contents = clean_ocr_text(text_content)
+    headlines, contents = clean_ocr_text(raw_text)
 
     # Build EPUB chapters
     chapters = []
@@ -101,8 +91,7 @@ def pdf_to_epub(pdf_path, output_path, use_ocr=False):
 @bot.on_message(filters.command("start"))
 async def start(client, message):
     await message.reply_text(
-        "👋 Send me a PDF and I will convert it to EPUB.\n\n"
-        "💡 Add caption 'ocr' if the PDF is scanned/image-based."
+        "👋 Send me a PDF and I will OCR it and convert to EPUB (English only)."
     )
 
 @bot.on_message(filters.document)
@@ -114,11 +103,10 @@ async def handle_pdf(client, message):
         pdf_file = await message.download()
         epub_file = pdf_file.replace(".pdf", ".epub")
 
-        use_ocr = "ocr" in (message.caption or "").lower()
-        await message.reply_text("📚 Converting your PDF... Please wait ⏳")
+        await message.reply_text("📚 Running OCR and converting your PDF... Please wait ⏳")
 
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, pdf_to_epub, pdf_file, epub_file, use_ocr)
+        await loop.run_in_executor(None, pdf_to_epub, pdf_file, epub_file)
 
         await message.reply_document(epub_file, caption="✅ Here is your EPUB!")
 
