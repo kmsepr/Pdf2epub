@@ -1,8 +1,5 @@
-pyrogram==2.0.106
-tgcrypto
-PyPDF2
+Flask
 pytesseract
 pdf2image
 Pillow
 ebooklib
-aiohttp
