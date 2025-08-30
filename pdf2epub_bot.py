@@ -19,7 +19,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
 bot = Client("pdf2epub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # ---------------- Helpers ----------------
-async def pdf_to_epub(pdf_path, output_path, use_ocr=False):
+def pdf_to_epub(pdf_path, output_path, use_ocr=False):
     book = epub.EpubBook()
     book.set_identifier("pdf2epub")
     book.set_title("Converted Book")
@@ -32,7 +32,6 @@ async def pdf_to_epub(pdf_path, output_path, use_ocr=False):
         for page in pages:
             text_content += pytesseract.image_to_string(page, lang="eng") + "\n"
     else:
-        # Fallback: extract text with PyPDF2
         import PyPDF2
         reader = PyPDF2.PdfReader(open(pdf_path, "rb"))
         text_content = "\n".join([p.extract_text() or "" for p in reader.pages])
@@ -53,7 +52,8 @@ async def pdf_to_epub(pdf_path, output_path, use_ocr=False):
 # ---------------- Bot Handlers ----------------
 @bot.on_message(filters.command("start"))
 async def start(client, message):
-    await message.reply_text("👋 Send me a PDF and I will convert it to EPUB (with OCR support).")
+    await message.reply_text("👋 Send me a PDF and I will convert it to EPUB (with OCR support).\n\n"
+                             "Tip: Add caption 'ocr' if you want OCR extraction.")
 
 @bot.on_message(filters.document & filters.file_mime_type("application/pdf"))
 async def handle_pdf(client, message):
@@ -61,9 +61,7 @@ async def handle_pdf(client, message):
         pdf_file = await message.download()
         epub_file = pdf_file.replace(".pdf", ".epub")
 
-        # Run OCR only if user says "ocr"
         use_ocr = "ocr" in (message.caption or "").lower()
-
         await message.reply_text("📚 Converting your PDF... Please wait ⏳")
 
         loop = asyncio.get_event_loop()
@@ -85,7 +83,7 @@ async def healthcheck(request):
 def run_web():
     app = web.Application()
     app.router.add_get("/", healthcheck)
-    web.run_app(app, port=int(os.getenv("PORT", 8080)))
+    web.run_app(app, port=int(os.getenv("PORT", 5000)))
 
 # ---------------- Run Both ----------------
 if __name__ == "__main__":
