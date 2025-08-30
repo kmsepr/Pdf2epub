@@ -1,6 +1,8 @@
-Flask
+pyrogram
+tgcrypto
+aiohttp
 pytesseract
 pdf2image
 Pillow
 ebooklib
-pyrogram
+PyPDF2
