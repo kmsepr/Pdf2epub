@@ -1,20 +1,26 @@
-# Use official Python image as base
+# Use official Python image
 FROM python:3.11-slim
 
-# Set working directory inside container
+# Prevent Python from writing .pyc files & buffering logs
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Set work directory
 WORKDIR /app
 
-# Copy requirements file
+# Install system deps (ffmpeg optional, good if you later handle media)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first (for caching)
 COPY requirements.txt .
 
-# Install dependencies
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy bot script
-COPY pdf2epub_bot.py .
-
-# Set environment variable for Telegram token (can override at runtime)
-ENV TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN_HERE"
+# Copy bot source
+COPY . .
 
 # Run the bot
-CMD ["python", "pdf2epub_bot.py"]
+CMD ["python3", "pdf2epub_bot.py"]
