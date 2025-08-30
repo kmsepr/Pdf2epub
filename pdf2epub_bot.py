@@ -5,7 +5,7 @@ from pyrogram import Client, filters
 from pdf2image import convert_from_path
 import pytesseract
 from ebooklib import epub
-from aiohttp import web
+from flask import Flask
 from langdetect import detect
 
 # ---------------- Logging ----------------
@@ -87,12 +87,14 @@ def pdf_to_epub(pdf_path, output_path):
     epub.write_epub(output_path, book)
     return output_path
 
+
 # ---------------- Bot Handlers ----------------
 @bot.on_message(filters.command("start"))
 async def start(client, message):
     await message.reply_text(
         "👋 Send me a PDF and I will OCR it and convert to EPUB (English only)."
     )
+
 
 @bot.on_message(filters.document)
 async def handle_pdf(client, message):
@@ -117,18 +119,23 @@ async def handle_pdf(client, message):
         logger.error(f"Conversion failed: {e}")
         await message.reply_text(f"❌ Failed to convert: {e}")
 
-# ---------------- Dummy Web Server ----------------
-async def healthcheck(request):
-    return web.Response(text="Bot is alive!")
 
-def run_web():
-    app = web.Application()
-    app.router.add_get("/", healthcheck)
-    web.run_app(app, port=int(os.getenv("PORT", 5000)))
+# ---------------- Flask Health Server ----------------
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def healthcheck():
+    return "Bot is alive!", 200
+
+
+def run_flask():
+    port = int(os.getenv("PORT", 5000))
+    flask_app.run(host="0.0.0.0", port=port)
+
 
 # ---------------- Run Both ----------------
 if __name__ == "__main__":
     import threading
-    t = threading.Thread(target=run_web, daemon=True)
+    t = threading.Thread(target=run_flask, daemon=True)
     t.start()
     bot.run()
