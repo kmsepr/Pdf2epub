@@ -1,62 +1,90 @@
-from flask import Flask, request, send_file, jsonify
-import subprocess
 import os
-import uuid
+import tempfile
+from telegram import Update, InputFile
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import fitz  # PyMuPDF
+from ebooklib import epub
 
-app = Flask(__name__)
+# Get your bot token from environment variable for security
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Folders for storing uploaded PDFs and generated EPUBs
-UPLOAD_FOLDER = "uploads"
-CONVERTED_FOLDER = "converted"
+if not BOT_TOKEN:
+    raise RuntimeError("Please set TELEGRAM_BOT_TOKEN environment variable")
 
-# Ensure folders exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(CONVERTED_FOLDER, exist_ok=True)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Send me a forwarded PDF file, and I'll convert it to EPUB!")
 
-@app.route('/convert', methods=['POST'])
-def convert_pdf_to_epub():
-    # Check if file part is present in request
-    if 'file' not in request.files:
-        return jsonify({"error": "No file part in the request"}), 400
+def pdf_to_epub(pdf_path, epub_path):
+    # Open PDF
+    doc = fitz.open(pdf_path)
 
-    file = request.files['file']
+    book = epub.EpubBook()
+    book.set_identifier('id123456')
+    book.set_title('Converted PDF to EPUB')
+    book.set_language('en')
 
-    # Check if a file is selected
-    if file.filename == '':
-        return jsonify({"error": "No file selected"}), 400
+    # Add a default chapter for each page with text content
+    chapters = []
+    for i, page in enumerate(doc):
+        text = page.get_text()
+        c = epub.EpubHtml(title=f'Page {i+1}', file_name=f'chap_{i+1}.xhtml', lang='en')
+        # Simple HTML formatting, replace newlines with <br> for better layout
+        html_content = '<br>'.join(text.split('\n'))
+        c.content = f'<h1>Page {i+1}</h1><p>{html_content}</p>'
+        book.add_item(c)
+        chapters.append(c)
 
-    # Accept only PDF files
-    if not file.filename.lower().endswith('.pdf'):
-        return jsonify({"error": "Only PDF files are supported"}), 400
+    # Define Table Of Contents and Spine
+    book.toc = tuple(chapters)
+    book.spine = ['nav'] + chapters
 
-    # Generate a unique filename to avoid conflicts
-    unique_id = str(uuid.uuid4())
-    input_pdf_path = os.path.join(UPLOAD_FOLDER, unique_id + ".pdf")
-    output_epub_path = os.path.join(CONVERTED_FOLDER, unique_id + ".epub")
+    # Add navigation files
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
 
-    # Save uploaded PDF
-    file.save(input_pdf_path)
+    # Write to EPUB
+    epub.write_epub(epub_path, book)
 
-    # Convert PDF to EPUB using Calibre's ebook-convert CLI
-    try:
-        subprocess.run(
-            ['ebook-convert', input_pdf_path, output_epub_path],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-    except subprocess.CalledProcessError as e:
-        error_msg = e.stderr.decode() if e.stderr else "Unknown error"
-        return jsonify({"error": "Conversion failed", "details": error_msg}), 500
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
 
-    # Return the converted EPUB as a file download
-    return send_file(
-        output_epub_path,
-        as_attachment=True,
-        download_name=file.filename.rsplit('.', 1)[0] + '.epub'
-    )
+    # Check if message is forwarded and has document
+    if message.forward_date and message.document:
+        doc = message.document
+        if doc.mime_type != 'application/pdf':
+            await message.reply_text("Please send a PDF file.")
+            return
 
+        # Download PDF to temp file
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdf_path = os.path.join(tmpdir, 'input.pdf')
+            epub_path = os.path.join(tmpdir, 'output.epub')
+
+            await doc.get_file().download_to_drive(pdf_path)
+
+            # Convert PDF to EPUB
+            try:
+                pdf_to_epub(pdf_path, epub_path)
+            except Exception as e:
+                await message.reply_text(f"Failed to convert PDF to EPUB: {e}")
+                return
+
+            # Send EPUB back
+            with open(epub_path, 'rb') as f:
+                await message.reply_document(InputFile(f, filename='converted.epub'))
+
+    else:
+        await message.reply_text("Please forward a PDF document to convert.")
+
+async def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Document.ALL & filters.Forwarded, handle_document))
+
+    print("Bot is running...")
+    await app.run_polling()
 
 if __name__ == '__main__':
-    # Run the Flask server on all interfaces, port 5000
-    app.run(host='0.0.0.0', port=5000)
+    import asyncio
+    asyncio.run(main())
