@@ -1,39 +1,43 @@
-# Use official Python base image
-FROM python:3.11-slim
+# Use Debian Trixie base image
+FROM debian:trixie
 
-# Install dependencies for Calibre ebook-convert
-RUN apt-get update && apt-get install -y \
-    wget \
-    xz-utils \
-    libglu1-mesa \
-    libxrender1 \
-    libxext6 \
-    libsm6 \
-    libfontconfig1 \
-    libfreetype6 \
-    libx11-6 \
-    libxrender1 \
-    libxext6 \
-    && rm -rf /var/lib/apt/lists/*
+# Set environment variables to avoid interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TERM=xterm
 
-# Download and install Calibre (ebook-convert)
-RUN wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sh /dev/stdin
+# Update and install packages
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        wget \
+        xz-utils \
+        fonts-dejavu-core \
+        fonts-dejavu-mono \
+        libexpat1 \
+        libunistring5 \
+        libidn2-0 \
+        libp11-kit0 \
+        libtasn1-6 \
+        libgnutls30 \
+        libpsl5 \
+        libbrotli1 \
+        libpng16-16 \
+        libfreetype6 \
+        libfontconfig1 \
+        libglvnd0 \
+        libopengl0 \
+        libglu1-mesa \
+        x11-common \
+        libice6 \
+        libsm6 \
+        libxau6 \
+        libxdmcp6 \
+        libxcb1 \
+        libx11-data \
+        libx11-6 \
+        libxext6 \
+        libxrender1 \
+        publicsuffix \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set working directory inside container
-WORKDIR /app
-
-# Copy your Python bot script and requirements
-COPY pdf2epub_bot.py /app/
-COPY requirements.txt /app/
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Create folders for uploads and converted files
-RUN mkdir uploads converted
-
-# Expose port 5000 for the Flask app
-EXPOSE 5000
-
-# Run the Flask app
-CMD ["python", "pdf2epub_bot.py"]
+# Set a default command
+CMD ["bash"]
