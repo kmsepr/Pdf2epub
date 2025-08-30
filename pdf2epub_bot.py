@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import tempfile
 from pyrogram import Client, filters
 from pdf2image import convert_from_path, pdfinfo_from_path
 import pytesseract
@@ -62,26 +63,34 @@ def pdf_to_epub(pdf_path, output_path):
     headlines = []
     contents = []
 
-    logger.info("Running OCR on PDF page by page...")
+    logger.info("Running OCR on PDF page by page using temporary images...")
 
     # Get total pages
     info = pdfinfo_from_path(pdf_path)
     total_pages = info["Pages"]
 
     for page_number in range(1, total_pages + 1):
-        pages = convert_from_path(
-            pdf_path, dpi=200, first_page=page_number, last_page=page_number
-        )
-        page_image = pages[0]
-        raw_text = pytesseract.image_to_string(page_image, lang="eng")
+        # Use temporary folder for this page
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pages = convert_from_path(
+                pdf_path,
+                dpi=200,
+                first_page=page_number,
+                last_page=page_number,
+                fmt="png",
+                output_folder=tmpdir,
+            )
+            page_image = pages[0]
+            raw_text = pytesseract.image_to_string(page_image, lang="eng")
 
-        page_headlines, page_contents = clean_ocr_text(raw_text)
-        headlines.extend(page_headlines)
-        contents.extend(page_contents)
+            page_headlines, page_contents = clean_ocr_text(raw_text)
+            headlines.extend(page_headlines)
+            contents.extend(page_contents)
 
-        # Free memory
-        del page_image
-        del pages
+            logger.info(f"OCR completed for page {page_number}/{total_pages}")
+
+            del page_image
+            del pages
 
     # Build EPUB chapters
     chapters = []
@@ -99,6 +108,7 @@ def pdf_to_epub(pdf_path, output_path):
     book.spine = ["nav"] + chapters
 
     epub.write_epub(output_path, book)
+    logger.info(f"EPUB created successfully: {output_path}")
     return output_path
 
 # ---------------- Bot Handlers ----------------
@@ -120,7 +130,12 @@ async def handle_pdf(client, message):
         await message.reply_text("📚 Running OCR and converting your PDF... Please wait ⏳")
 
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, pdf_to_epub, pdf_file, epub_file)
+        try:
+            await loop.run_in_executor(None, pdf_to_epub, pdf_file, epub_file)
+        except Exception as e:
+            logger.error(f"OCR/EPUB conversion error: {e}")
+            await message.reply_text(f"❌ Conversion failed: {e}")
+            return
 
         await message.reply_document(epub_file, caption="✅ Here is your EPUB!")
 
