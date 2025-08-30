@@ -1,15 +1,24 @@
-# Use official Python runtime
-FROM python:3.10-slim
+# Use a lightweight Python base image
+FROM python:3.11-slim
 
-# Set working directory
+# Install system dependencies for OCR and PDF handling
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    poppler-utils \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set work directory
 WORKDIR /app
 
-# Install dependencies
+# Copy requirements first for caching
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app code
-COPY . .
+# Copy the bot code
+COPY pdf2epub_bot.py .
 
 # Expose Flask port
 EXPOSE 5000
