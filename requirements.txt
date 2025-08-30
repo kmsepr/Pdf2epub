@@ -1,8 +1,8 @@
-pyrogram
-tgcrypto
-aiohttp
-pytesseract
-pdf2image
-Pillow
-ebooklib
-PyPDF2
+pyrogram==2.0.106
+tgcrypto==1.2.5
+aiohttp==3.9.5
+pytesseract==0.3.13
+pdf2image==1.17.0
+Pillow==10.3.0
+ebooklib==0.18
+PyPDF2==3.0.1
