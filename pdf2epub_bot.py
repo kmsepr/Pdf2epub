@@ -1,6 +1,8 @@
 import os
 import asyncio
 import logging
+import tempfile
+import time
 from pyrogram import Client, filters
 from ebooklib import epub
 from flask import Flask
@@ -8,7 +10,7 @@ from langdetect import detect
 from PyPDF2 import PdfReader
 from pdf2image import convert_from_path
 import pytesseract
-import tempfile
+import threading
 
 # ---------------- Logging ----------------
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +53,7 @@ def clean_text(raw_text: str):
 
     return headlines, content_blocks
 
-def pdf_to_epub(pdf_path, output_path):
+async def pdf_to_epub(pdf_path, output_path, client=None, chat_id=None):
     book = epub.EpubBook()
     book.set_identifier("pdf2epub")
     book.set_title("Converted Book")
@@ -60,12 +62,20 @@ def pdf_to_epub(pdf_path, output_path):
     reader = PdfReader(pdf_path)
     headlines, contents = [], []
 
+    total_pages = len(reader.pages)
+    progress_msg = None
+    if client and chat_id:
+        progress_msg = await client.send_message(chat_id, "Starting PDF conversion...")
+
+    start_time = time.time()
+
     for page_number, page in enumerate(reader.pages, start=1):
         raw_text = page.extract_text()
-        if raw_text and raw_text.strip():  # Text-based page
+        if raw_text and raw_text.strip():
             page_headlines, page_contents = clean_text(raw_text)
-        else:  # Image-based page → OCR
-            logger.info(f"Page {page_number} is image-based, running OCR...")
+            page_type = "text-based"
+        else:
+            page_type = "image-based (OCR)"
             with tempfile.TemporaryDirectory() as tmpdir:
                 pages = convert_from_path(
                     pdf_path,
@@ -80,8 +90,32 @@ def pdf_to_epub(pdf_path, output_path):
                 page_headlines, page_contents = clean_text(raw_text)
                 del page_image
                 del pages
+
         headlines.extend(page_headlines)
         contents.extend(page_contents)
+
+        # Progress and ETA
+        elapsed = time.time() - start_time
+        avg_time = elapsed / page_number
+        remaining_pages = total_pages - page_number
+        eta_seconds = int(avg_time * remaining_pages)
+        eta_text = time.strftime("%M:%S", time.gmtime(eta_seconds))
+
+        percent = int((page_number / total_pages) * 100)
+        bar_length = 20
+        filled_length = int(bar_length * percent // 100)
+        bar = "█" * filled_length + "─" * (bar_length - filled_length)
+
+        progress_text = (
+            f"📄 Page {page_number}/{total_pages} ({page_type})\n"
+            f"[{bar}] {percent}%\n⏳ ETA: {eta_text}"
+        )
+
+        if progress_msg:
+            try:
+                await progress_msg.edit_text(progress_text)
+            except Exception as e:
+                logger.warning(f"Failed to edit progress message: {e}")
 
     # Build EPUB chapters
     chapters = []
@@ -99,6 +133,13 @@ def pdf_to_epub(pdf_path, output_path):
 
     epub.write_epub(output_path, book)
     logger.info(f"EPUB created successfully: {output_path}")
+
+    if progress_msg:
+        try:
+            await progress_msg.edit_text(f"✅ Conversion complete! EPUB ready.")
+        except:
+            pass
+
     return output_path
 
 # ---------------- Bot Handlers ----------------
@@ -119,8 +160,9 @@ async def handle_pdf(client, message):
 
         await message.reply_text("📚 Converting your PDF... Please wait ⏳")
 
+        # Run the blocking conversion in executor
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, pdf_to_epub, pdf_file, epub_file)
+        await loop.run_in_executor(None, lambda: asyncio.run(pdf_to_epub(pdf_file, epub_file, client, message.chat.id)))
 
         await message.reply_document(epub_file, caption="✅ Here is your EPUB!")
 
@@ -144,7 +186,6 @@ def run_flask():
 
 # ---------------- Run Both ----------------
 if __name__ == "__main__":
-    import threading
     t = threading.Thread(target=run_flask, daemon=True)
     t.start()
     bot.run()
