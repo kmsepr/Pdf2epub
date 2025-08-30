@@ -1,97 +1,49 @@
-import os
-import fitz  # PyMuPDF
-import logging
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from flask import Flask, request, send_file, jsonify
 import subprocess
+import os
+import uuid
 
-# === Configuration ===
-TOKEN = os.getenv("TELEGRAM_TOKEN")  # Set this as an environment variable
-WATERMARK_KEYWORDS = [
-    "Licensed to",
-    "This PDF was generated for",
-    "Confidential",
-    "Watermarked Copy",
-    "For XYZ only"
-]
+app = Flask(__name__)
+UPLOAD_FOLDER = "uploads"
+CONVERTED_FOLDER = "converted"
 
-# === Logging ===
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    level=logging.INFO)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(CONVERTED_FOLDER, exist_ok=True)
 
+@app.route('/convert', methods=['POST'])
+def convert_pdf_to_epub():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    if not file.filename.lower().endswith('.pdf'):
+        return jsonify({"error": "Only PDF files are supported"}), 400
 
-# === Step 1: Remove watermark text from PDF ===
-def remove_watermark_text(input_pdf, output_pdf):
-    doc = fitz.open(input_pdf)
-    for page in doc:
-        blocks = page.get_text("dict")["blocks"]
-        for b in blocks:
-            if "lines" not in b:
-                continue
-            for line in b["lines"]:
-                for span in line["spans"]:
-                    text = span["text"].strip()
-                    if any(keyword.lower() in text.lower() for keyword in WATERMARK_KEYWORDS):
-                        rect = fitz.Rect(span["bbox"])
-                        page.add_redact_annot(rect, fill=(1, 1, 1))  # White fill
-        page.apply_redactions()
-    doc.save(output_pdf)
-    doc.close()
+    unique_id = str(uuid.uuid4())
+    input_pdf_path = os.path.join(UPLOAD_FOLDER, unique_id + ".pdf")
+    output_epub_path = os.path.join(CONVERTED_FOLDER, unique_id + ".epub")
+    
+    file.save(input_pdf_path)
 
+    try:
+        subprocess.run(
+            ['ebook-convert', input_pdf_path, output_epub_path],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": "Conversion failed", "details": e.stderr.decode()}), 500
+    
+    return send_file(
+        output_epub_path,
+        as_attachment=True,
+        download_name=file.filename.rsplit('.', 1)[0] + '.epub'
+    )
 
-# === Step 2: Convert to EPUB using Calibre ===
-def convert_pdf_to_epub(pdf_path):
-    clean_pdf = pdf_path.replace(".pdf", "_clean.pdf")
-    epub_path = pdf_path.replace(".pdf", ".epub")
-
-    remove_watermark_text(pdf_path, clean_pdf)
-
-    result = subprocess.run(["ebook-convert", clean_pdf, epub_path])
-
-    if result.returncode == 0 and os.path.exists(epub_path):
-        return epub_path
-    return None
-
-
-# === Step 3: Telegram Bot ===
-async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    document = update.message.document
-
-    if not document or not document.file_name.lower().endswith(".pdf"):
-        await update.message.reply_text("Please send a valid PDF file.")
-        return
-
-    await update.message.reply_text("📥 Downloading and processing your PDF...")
-
-    # Save the uploaded file
-    file_path = f"/tmp/{document.file_name}"
-    new_file = await context.bot.get_file(document.file_id)
-    await new_file.download_to_drive(file_path)
-
-    # Convert the file
-    await update.message.reply_text("🔄 Removing watermarks and converting to EPUB...")
-    epub_path = convert_pdf_to_epub(file_path)
-
-    if epub_path:
-        await update.message.reply_document(document=open(epub_path, "rb"),
-                                            filename=os.path.basename(epub_path),
-                                            caption="✅ Here is your EPUB file!")
-    else:
-        await update.message.reply_text("❌ Failed to convert the PDF to EPUB.")
-
-
-# === Start the Bot ===
-def main():
-    if not TOKEN:
-        print("❌ TELEGRAM_TOKEN environment variable is not set.")
-        return
-
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.Document.PDF, handle_pdf))
-
-    print("🤖 Bot is running...")
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
