@@ -1,27 +1,28 @@
 import os
 import asyncio
 import logging
-import tempfile
 from pyrogram import Client, filters
-from pdf2image import convert_from_path, pdfinfo_from_path
-import pytesseract
 from ebooklib import epub
 from flask import Flask
 from langdetect import detect
+from PyPDF2 import PdfReader
+from pdf2image import convert_from_path
+import pytesseract
+import tempfile
 
 # ---------------- Logging ----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ---------------- Bot Credentials ----------------
-API_ID = int(os.getenv("API_ID", "123456"))        # replace with your API_ID or env var
-API_HASH = os.getenv("API_HASH", "your_api_hash")  # replace with your API_HASH or env var
+API_ID = int(os.getenv("API_ID", "123456"))
+API_HASH = os.getenv("API_HASH", "your_api_hash")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
 
 bot = Client("pdf2epub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # ---------------- Helpers ----------------
-def clean_ocr_text(raw_text: str):
+def clean_text(raw_text: str):
     """Filter only English and split into headlines/content."""
     lines = raw_text.split("\n")
     english_lines = []
@@ -31,24 +32,20 @@ def clean_ocr_text(raw_text: str):
         if not line:
             continue
         try:
-            if detect(line) == "en":  # keep only English
+            if detect(line) == "en":
                 english_lines.append(line)
         except:
             continue
 
-    headlines = []
-    content_blocks = []
-    current_block = []
-
+    headlines, content_blocks, current_block = [], [], []
     for line in english_lines:
         if line.isupper() or (len(line.split()) <= 6 and line.istitle()):
-            if current_block:  # save current block
+            if current_block:
                 content_blocks.append(" ".join(current_block))
                 current_block = []
             headlines.append(line)
         else:
             current_block.append(line)
-
     if current_block:
         content_blocks.append(" ".join(current_block))
 
@@ -60,37 +57,31 @@ def pdf_to_epub(pdf_path, output_path):
     book.set_title("Converted Book")
     book.set_language("en")
 
-    headlines = []
-    contents = []
+    reader = PdfReader(pdf_path)
+    headlines, contents = [], []
 
-    logger.info("Running OCR on PDF page by page using temporary images...")
-
-    # Get total pages
-    info = pdfinfo_from_path(pdf_path)
-    total_pages = info["Pages"]
-
-    for page_number in range(1, total_pages + 1):
-        # Use temporary folder for this page
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pages = convert_from_path(
-                pdf_path,
-                dpi=200,
-                first_page=page_number,
-                last_page=page_number,
-                fmt="png",
-                output_folder=tmpdir,
-            )
-            page_image = pages[0]
-            raw_text = pytesseract.image_to_string(page_image, lang="eng")
-
-            page_headlines, page_contents = clean_ocr_text(raw_text)
-            headlines.extend(page_headlines)
-            contents.extend(page_contents)
-
-            logger.info(f"OCR completed for page {page_number}/{total_pages}")
-
-            del page_image
-            del pages
+    for page_number, page in enumerate(reader.pages, start=1):
+        raw_text = page.extract_text()
+        if raw_text and raw_text.strip():  # Text-based page
+            page_headlines, page_contents = clean_text(raw_text)
+        else:  # Image-based page → OCR
+            logger.info(f"Page {page_number} is image-based, running OCR...")
+            with tempfile.TemporaryDirectory() as tmpdir:
+                pages = convert_from_path(
+                    pdf_path,
+                    dpi=200,
+                    first_page=page_number,
+                    last_page=page_number,
+                    fmt="png",
+                    output_folder=tmpdir,
+                )
+                page_image = pages[0]
+                raw_text = pytesseract.image_to_string(page_image, lang="eng")
+                page_headlines, page_contents = clean_text(raw_text)
+                del page_image
+                del pages
+        headlines.extend(page_headlines)
+        contents.extend(page_contents)
 
     # Build EPUB chapters
     chapters = []
@@ -101,7 +92,6 @@ def pdf_to_epub(pdf_path, output_path):
         book.add_item(chapter)
         chapters.append(chapter)
 
-    # TOC & navigation
     book.toc = tuple(chapters)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
@@ -115,7 +105,7 @@ def pdf_to_epub(pdf_path, output_path):
 @bot.on_message(filters.command("start"))
 async def start(client, message):
     await message.reply_text(
-        "👋 Send me a PDF and I will OCR it and convert to EPUB (English only)."
+        "👋 Send me a PDF and I will convert it to EPUB. OCR is used only if needed."
     )
 
 @bot.on_message(filters.document)
@@ -127,15 +117,10 @@ async def handle_pdf(client, message):
         pdf_file = await message.download()
         epub_file = pdf_file.replace(".pdf", ".epub")
 
-        await message.reply_text("📚 Running OCR and converting your PDF... Please wait ⏳")
+        await message.reply_text("📚 Converting your PDF... Please wait ⏳")
 
         loop = asyncio.get_event_loop()
-        try:
-            await loop.run_in_executor(None, pdf_to_epub, pdf_file, epub_file)
-        except Exception as e:
-            logger.error(f"OCR/EPUB conversion error: {e}")
-            await message.reply_text(f"❌ Conversion failed: {e}")
-            return
+        await loop.run_in_executor(None, pdf_to_epub, pdf_file, epub_file)
 
         await message.reply_document(epub_file, caption="✅ Here is your EPUB!")
 
