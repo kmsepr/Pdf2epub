@@ -184,8 +184,27 @@ def run_flask():
     port = int(os.getenv("PORT", 5000))
     flask_app.run(host="0.0.0.0", port=port)
 
+# ---------------- Keep-Alive Ping ----------------
+def keep_alive_ping():
+    import requests
+    URL = "https://your-koyeb-app-url/"  # replace with your actual Flask healthcheck URL
+    while True:
+        try:
+            r = requests.get(URL)
+            print(f"{time.ctime()} - Pinged, status: {r.status_code}")
+        except Exception as e:
+            print(f"{time.ctime()} - Failed: {e}")
+        time.sleep(300)  # every 5 minutes
+
 # ---------------- Run Both ----------------
 if __name__ == "__main__":
+    # Start Flask
     t = threading.Thread(target=run_flask, daemon=True)
     t.start()
+
+    # Start keep-alive ping
+    ping_thread = threading.Thread(target=keep_alive_ping, daemon=True)
+    ping_thread.start()
+
+    # Run the bot
     bot.run()
