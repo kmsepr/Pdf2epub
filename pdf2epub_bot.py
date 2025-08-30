@@ -1,49 +1,54 @@
 import os
-import subprocess
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+from pyrogram import Client, filters
+from pyrogram.types import Message
 
-DOWNLOAD_DIR = "/tmp"
+# ==============================
+# 🔑 Configuration
+# ==============================
+API_ID = int(os.environ.get("API_ID", "12345"))
+API_HASH = os.environ.get("API_HASH", "your_api_hash")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_bot_token")
 
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    document = message.document
+app = Client(
+    "pdf2epub_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
+)
 
-    if document.mime_type != "application/pdf":
-        await message.reply_text("Please forward a PDF document.")
-        return
+# ==============================
+# ✅ Forwarded filter for documents
+# ==============================
+forwarded_filter = filters.document & filters.create(
+    lambda flt, cli, msg: msg.forward_date is not None
+)
 
-    pdf_file_path = os.path.join(DOWNLOAD_DIR, document.file_name)
-    await document.get_file().download_to_drive(pdf_file_path)
-    await message.reply_text("PDF downloaded, converting to EPUB...")
+# ==============================
+# 🚀 Handlers
+# ==============================
+@app.on_message(filters.command("start"))
+async def start_handler(client: Client, message: Message):
+    await message.reply_text("👋 Hello! Send me a PDF (or forward one) and I will convert it to EPUB.")
 
-    epub_file_path = pdf_file_path.replace(".pdf", ".epub")
+@app.on_message(filters.document)
+async def handle_document(client: Client, message: Message):
+    if message.document.mime_type == "application/pdf":
+        await message.reply_text("📄 Received PDF! (Normal document, not forwarded)")
+        # TODO: convert pdf → epub here
+    else:
+        await message.reply_text("⚠️ Only PDF files are supported.")
 
-    try:
-        # Use your PDF to EPUB conversion command here
-        subprocess.run(["pdf2epub", pdf_file_path, epub_file_path], check=True)
-    except subprocess.CalledProcessError:
-        await message.reply_text("Failed to convert PDF to EPUB.")
-        return
+@app.on_message(forwarded_filter)
+async def handle_forwarded_document(client: Client, message: Message):
+    if message.document.mime_type == "application/pdf":
+        await message.reply_text("📄 Received *forwarded* PDF!")
+        # TODO: convert pdf → epub here
+    else:
+        await message.reply_text("⚠️ Only PDF files are supported.")
 
-    await message.reply_document(document=open(epub_file_path, "rb"), filename=os.path.basename(epub_file_path))
-
-    # Clean up files
-    os.remove(pdf_file_path)
-    os.remove(epub_file_path)
-
+# ==============================
+# ▶️ Run
+# ==============================
 if __name__ == "__main__":
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        print("Error: TELEGRAM_BOT_TOKEN environment variable not set")
-        exit(1)
-
-    app = ApplicationBuilder().token(token).build()
-
-    # Filter for forwarded messages
-    forwarded_filter = filters.Document.ALL & filters.Message(lambda msg: msg.forward_date is not None)
-
-    app.add_handler(MessageHandler(forwarded_filter, handle_document))
-
-    print("Bot is running...")
-    app.run_polling()
+    print("🤖 Bot is starting...")
+    app.run()
