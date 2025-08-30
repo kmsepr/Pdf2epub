@@ -1,27 +1,30 @@
-# Use a lightweight Python image
-FROM python:3.11-slim
+# Use official Python base image
+FROM python:3.10-slim
 
-# Install system dependencies for OCR (tesseract + poppler for pdf2image)
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (for OCR and PDF handling)
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     poppler-utils \
-    libtesseract-dev \
+    ghostscript \
+    libxml2 \
+    libxslt1.1 \
+    libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set work directory
-WORKDIR /app
-
-# Copy requirements first (for caching layers)
-COPY requirements.txt .
+# Copy requirements.txt first (for caching layers)
+COPY requirements.txt /app/
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy bot script
-COPY pdf2epub_bot.py .
+# Copy your bot script
+COPY pdf2epub_bot.py /app/
 
-# Expose Flask port
+# Expose port 5000
 EXPOSE 5000
 
-# Run the bot
+# Run the app
 CMD ["python", "pdf2epub_bot.py"]
