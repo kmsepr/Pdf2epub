@@ -6,6 +6,7 @@ from pdf2image import convert_from_path
 import pytesseract
 from ebooklib import epub
 from aiohttp import web
+from langdetect import detect
 
 # ---------------- Logging ----------------
 logging.basicConfig(level=logging.INFO)
@@ -19,32 +20,79 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
 bot = Client("pdf2epub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # ---------------- Helpers ----------------
+def clean_ocr_text(raw_text: str):
+    """Filter only English and split into headlines/content."""
+    lines = raw_text.split("\n")
+    english_lines = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            if detect(line) == "en":  # keep only English
+                english_lines.append(line)
+        except:
+            continue
+
+    headlines = []
+    content_blocks = []
+    current_block = []
+
+    for line in english_lines:
+        if line.isupper() or (len(line.split()) <= 6 and line.istitle()):
+            if current_block:  # save current block
+                content_blocks.append(" ".join(current_block))
+                current_block = []
+            headlines.append(line)
+        else:
+            current_block.append(line)
+
+    if current_block:
+        content_blocks.append(" ".join(current_block))
+
+    return headlines, content_blocks
+
+
 def pdf_to_epub(pdf_path, output_path, use_ocr=False):
     book = epub.EpubBook()
     book.set_identifier("pdf2epub")
     book.set_title("Converted Book")
     book.set_language("en")
 
+    # Extract text
     if use_ocr:
         logger.info("Running OCR on PDF...")
-        pages = convert_from_path(pdf_path)
-        text_content = ""
+        pages = convert_from_path(pdf_path, dpi=300)
+        raw_text = ""
         for page in pages:
-            text_content += pytesseract.image_to_string(page, lang="eng") + "\n"
+            raw_text += pytesseract.image_to_string(page, lang="eng") + "\n"
+        headlines, contents = clean_ocr_text(raw_text)
     else:
         import PyPDF2
-        reader = PyPDF2.PdfReader(open(pdf_path, "rb"))
-        text_content = "\n".join([p.extract_text() or "" for p in reader.pages])
+        try:
+            reader = PyPDF2.PdfReader(open(pdf_path, "rb"))
+            text_content = "\n".join([p.extract_text() or "" for p in reader.pages])
+        except Exception as e:
+            logger.warning(f"PyPDF2 failed, fallback to OCR: {e}")
+            return pdf_to_epub(pdf_path, output_path, use_ocr=True)
 
-    # Add text to EPUB
-    chapter = epub.EpubHtml(title="Content", file_name="content.xhtml", lang="en")
-    chapter.content = f"<h1>Converted PDF</h1><p>{text_content}</p>"
-    book.add_item(chapter)
+        headlines, contents = clean_ocr_text(text_content)
+
+    # Build EPUB chapters
+    chapters = []
+    for idx, content in enumerate(contents):
+        title = headlines[idx] if idx < len(headlines) else f"Chapter {idx+1}"
+        chapter = epub.EpubHtml(title=title, file_name=f"chap_{idx+1}.xhtml", lang="en")
+        chapter.content = f"<h2>{title}</h2><p>{content}</p>"
+        book.add_item(chapter)
+        chapters.append(chapter)
 
     # TOC & navigation
-    book.toc = (epub.Link("content.xhtml", "Content", "content"),)
+    book.toc = tuple(chapters)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
+    book.spine = ["nav"] + chapters
 
     epub.write_epub(output_path, book)
     return output_path
@@ -52,11 +100,16 @@ def pdf_to_epub(pdf_path, output_path, use_ocr=False):
 # ---------------- Bot Handlers ----------------
 @bot.on_message(filters.command("start"))
 async def start(client, message):
-    await message.reply_text("👋 Send me a PDF and I will convert it to EPUB (with OCR support).\n\n"
-                             "Tip: Add caption 'ocr' if you want OCR extraction.")
+    await message.reply_text(
+        "👋 Send me a PDF and I will convert it to EPUB.\n\n"
+        "💡 Add caption 'ocr' if the PDF is scanned/image-based."
+    )
 
-@bot.on_message(filters.document & filters.file_mime_type("application/pdf"))
+@bot.on_message(filters.document)
 async def handle_pdf(client, message):
+    if not message.document.file_name.lower().endswith(".pdf"):
+        return await message.reply_text("❌ Please send a valid PDF file.")
+
     try:
         pdf_file = await message.download()
         epub_file = pdf_file.replace(".pdf", ".epub")
