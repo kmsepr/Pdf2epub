@@ -1,6 +1,7 @@
-flask
-pytesseract
-pdf2image
-ebooklib
-lxml
-Pillow
+Flask==2.3.2
+PyPDF2==3.0.1
+pytesseract==0.3.10
+Pillow==10.0.0
+reportlab==4.0.4
+ebooklib==0.18
+lxml==4.9.3
